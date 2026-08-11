@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import ru.practicum.shareit.exception.ConflictException;
 import ru.practicum.shareit.exception.NotFoundException;
+import ru.practicum.shareit.user.dto.NewUserRequest;
+import ru.practicum.shareit.user.dto.UpdateUserRequest;
 import ru.practicum.shareit.user.dto.UserDto;
 
 import java.util.List;
@@ -17,34 +19,34 @@ public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
 
     @Override
-    public UserDto create(UserDto userDto) {
-        if (userRepository.existsByEmail(userDto.getEmail())) {
+    public UserDto create(NewUserRequest request) {
+        if (userRepository.existsByEmail(request.getEmail())) {
             throw new ConflictException(
-                    "Пользователь с email " + userDto.getEmail() + " уже существует"
+                    "Пользователь с email " + request.getEmail() + " уже существует"
             );
         }
 
-        User user = userRepository.save(UserMapper.toUser(userDto));
+        User user = userRepository.save(UserMapper.toUser(request));
         log.info("Создан пользователь с id {}", user.getId());
         return UserMapper.toUserDto(user);
     }
 
     @Override
-    public UserDto update(Long userId, UserDto userDto) {
+    public UserDto update(Long userId, UpdateUserRequest request) {
         User user = findUserOrThrow(userId);
 
-        if (userDto.getName() != null && !userDto.getName().isBlank()) {
-            user.setName(userDto.getName());
+        if (request.getName() != null && !request.getName().isBlank()) {
+            user.setName(request.getName());
         }
 
-        if (userDto.getEmail() != null && !userDto.getEmail().isBlank()) {
-            if (!user.getEmail().equalsIgnoreCase(userDto.getEmail())
-                    && userRepository.existsByEmail(userDto.getEmail())) {
+        if (request.getEmail() != null && !request.getEmail().isBlank()) {
+            if (!user.getEmail().equalsIgnoreCase(request.getEmail())
+                    && userRepository.existsByEmail(request.getEmail())) {
                 throw new ConflictException(
-                        "Пользователь с email " + userDto.getEmail() + " уже существует"
+                        "Пользователь с email " + request.getEmail() + " уже существует"
                 );
             }
-            user.setEmail(userDto.getEmail());
+            user.setEmail(request.getEmail());
         }
 
         log.info("Обновлён пользователь с id {}", userId);

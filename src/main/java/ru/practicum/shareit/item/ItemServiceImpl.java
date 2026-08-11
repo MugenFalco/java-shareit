@@ -6,6 +6,8 @@ import org.springframework.stereotype.Service;
 import ru.practicum.shareit.exception.ForbiddenException;
 import ru.practicum.shareit.exception.NotFoundException;
 import ru.practicum.shareit.item.dto.ItemDto;
+import ru.practicum.shareit.item.dto.NewItemRequest;
+import ru.practicum.shareit.item.dto.UpdateItemRequest;
 import ru.practicum.shareit.item.model.Item;
 import ru.practicum.shareit.user.User;
 import ru.practicum.shareit.user.UserRepository;
@@ -21,10 +23,10 @@ public class ItemServiceImpl implements ItemService {
     private final UserRepository userRepository;
 
     @Override
-    public ItemDto create(Long userId, ItemDto itemDto) {
+    public ItemDto create(Long userId, NewItemRequest request) {
         User owner = findUserOrThrow(userId);
 
-        Item item = ItemMapper.toItem(itemDto);
+        Item item = ItemMapper.toItem(request);
         item.setOwner(owner);
 
         Item saved = itemRepository.save(item);
@@ -33,7 +35,7 @@ public class ItemServiceImpl implements ItemService {
     }
 
     @Override
-    public ItemDto update(Long userId, Long itemId, ItemDto itemDto) {
+    public ItemDto update(Long userId, Long itemId, UpdateItemRequest request) {
         findUserOrThrow(userId);
         Item item = findItemOrThrow(itemId);
 
@@ -43,14 +45,14 @@ public class ItemServiceImpl implements ItemService {
             );
         }
 
-        if (itemDto.getName() != null && !itemDto.getName().isBlank()) {
-            item.setName(itemDto.getName());
+        if (request.getName() != null && !request.getName().isBlank()) {
+            item.setName(request.getName());
         }
-        if (itemDto.getDescription() != null && !itemDto.getDescription().isBlank()) {
-            item.setDescription(itemDto.getDescription());
+        if (request.getDescription() != null && !request.getDescription().isBlank()) {
+            item.setDescription(request.getDescription());
         }
-        if (itemDto.getAvailable() != null) {
-            item.setAvailable(itemDto.getAvailable());
+        if (request.getAvailable() != null) {
+            item.setAvailable(request.getAvailable());
         }
 
         log.info("Обновлена вещь с id {}", itemId);

@@ -3,23 +3,28 @@ package ru.practicum.shareit.item;
 import org.springframework.stereotype.Repository;
 import ru.practicum.shareit.item.model.Item;
 
-import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Repository
 public class InMemoryItemRepository implements ItemRepository {
 
     private final Map<Long, Item> items = new HashMap<>();
+    private final Map<Long, Set<Long>> itemIdsByOwner = new HashMap<>();
     private long nextId = 1;
 
     @Override
     public Item save(Item item) {
         item.setId(nextId++);
         items.put(item.getId(), item);
+        itemIdsByOwner
+                .computeIfAbsent(item.getOwner().getId(), ownerId -> new HashSet<>())
+                .add(item.getId());
         return item;
     }
 
@@ -36,18 +41,13 @@ public class InMemoryItemRepository implements ItemRepository {
 
     @Override
     public List<Item> findAllByOwnerId(Long ownerId) {
-        return items.values().stream()
-                .filter(item -> item.getOwner() != null
-                        && item.getOwner().getId().equals(ownerId))
+        return itemIdsByOwner.getOrDefault(ownerId, Set.of()).stream()
+                .map(items::get)
                 .toList();
     }
 
     @Override
     public List<Item> search(String text) {
-        if (text == null || text.isBlank()) {
-            return new ArrayList<>();
-        }
-
         String query = text.toLowerCase(Locale.ROOT);
 
         return items.values().stream()
