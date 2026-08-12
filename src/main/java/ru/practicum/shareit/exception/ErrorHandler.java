@@ -27,9 +27,9 @@ public class ErrorHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public ErrorResponse handleValidation(MethodArgumentNotValidException e) {
+    public ErrorResponse handleInvalidArgument(MethodArgumentNotValidException e) {
         String message = e.getBindingResult().getAllErrors().getFirst().getDefaultMessage();
-        log.warn("Ошибка валидации: {}", message);
+        log.warn("Ошибка валидации аргументов: {}", message);
         return new ErrorResponse(message);
     }
 
@@ -44,6 +44,13 @@ public class ErrorHandler {
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public ErrorResponse handleForbidden(ForbiddenException e) {
         log.warn("Доступ запрещён: {}", e.getMessage());
+        return new ErrorResponse(e.getMessage());
+    }
+
+    @ExceptionHandler(ValidationException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ErrorResponse handleValidation(ValidationException e) {
+        log.warn("Ошибка валидации: {}", e.getMessage());
         return new ErrorResponse(e.getMessage());
     }
 }
