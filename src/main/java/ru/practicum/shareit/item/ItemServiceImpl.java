@@ -77,7 +77,7 @@ public class ItemServiceImpl implements ItemService {
         ItemWithBookingsDto dto = ItemMapper.toItemWithBookingsDto(item);
 
         if (item.getOwner().getId().equals(userId)) {
-            fillBookings(dto, bookingRepository.findAllByItemIdOrderByStartAsc(itemId));
+            fillBookings(dto, bookingRepository.findAllByItemIdAndStatusOrderByStartAsc(itemId, BookingStatus.APPROVED));
         }
 
         dto.setComments(
@@ -101,7 +101,7 @@ public class ItemServiceImpl implements ItemService {
         List<Long> itemIds = items.stream().map(Item::getId).toList();
 
         Map<Long, List<Booking>> bookingsByItem = bookingRepository
-                .findAllByItemIdInOrderByStartAsc(itemIds).stream()
+                .findAllByItemIdInAndStatusOrderByStartAsc(itemIds, BookingStatus.APPROVED).stream()
                 .collect(Collectors.groupingBy(booking -> booking.getItem().getId()));
 
         Map<Long, List<CommentDto>> commentsByItem = commentRepository
@@ -125,13 +125,11 @@ public class ItemServiceImpl implements ItemService {
         LocalDateTime now = LocalDateTime.now();
 
         Booking last = bookings.stream()
-                .filter(booking -> booking.getStatus() == BookingStatus.APPROVED)
                 .filter(booking -> !booking.getStart().isAfter(now))
                 .reduce((first, second) -> second)
                 .orElse(null);
 
         Booking next = bookings.stream()
-                .filter(booking -> booking.getStatus() == BookingStatus.APPROVED)
                 .filter(booking -> booking.getStart().isAfter(now))
                 .findFirst()
                 .orElse(null);
@@ -169,12 +167,7 @@ public class ItemServiceImpl implements ItemService {
             );
         }
 
-        Comment comment = new Comment();
-        comment.setText(request.getText());
-        comment.setItem(item);
-        comment.setAuthor(author);
-        comment.setCreated(LocalDateTime.now());
-
+        Comment comment = CommentMapper.toComment(request, item, author);
         Comment saved = commentRepository.save(comment);
         log.info("Пользователь {} оставил отзыв на вещь {}", userId, itemId);
         return CommentMapper.toCommentDto(saved);

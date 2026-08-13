@@ -41,18 +41,19 @@ public class BookingServiceImpl implements BookingService {
             throw new NotFoundException("Владелец не может забронировать свою вещь");
         }
 
+        if (bookingRepository.existsApprovedOverlap(item.getId(), request.getStart(), request.getEnd())) {
+            throw new ValidationException("Вещь уже забронирована на выбранные даты");
+        }
+
         if (!request.getEnd().isAfter(request.getStart())) {
             throw new ValidationException(
                     "Дата окончания должна быть позже даты начала"
             );
         }
 
-        Booking booking = BookingMapper.toBooking(request);
-        booking.setItem(item);
-        booking.setBooker(booker);
-        booking.setStatus(BookingStatus.WAITING);
-
+        Booking booking = BookingMapper.toBooking(request, item, booker);
         Booking saved = bookingRepository.save(booking);
+
         log.info("Пользователь {} создал бронирование {}", userId, saved.getId());
         return BookingMapper.toBookingDto(saved);
     }
