@@ -3,6 +3,7 @@ package ru.practicum.shareit.user;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import ru.practicum.shareit.exception.ConflictException;
 import ru.practicum.shareit.exception.NotFoundException;
 import ru.practicum.shareit.user.dto.NewUserRequest;
@@ -14,11 +15,13 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@Transactional(readOnly = true)
 public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
 
     @Override
+    @Transactional
     public UserDto create(NewUserRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new ConflictException(
@@ -32,6 +35,7 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
+    @Transactional
     public UserDto update(Long userId, UpdateUserRequest request) {
         User user = findUserOrThrow(userId);
 
@@ -40,8 +44,7 @@ public class UserServiceImpl implements UserService {
         }
 
         if (request.getEmail() != null && !request.getEmail().isBlank()) {
-            if (!user.getEmail().equalsIgnoreCase(request.getEmail())
-                    && userRepository.existsByEmail(request.getEmail())) {
+            if (userRepository.existsByEmailAndIdNot(request.getEmail(), userId)) {
                 throw new ConflictException(
                         "Пользователь с email " + request.getEmail() + " уже существует"
                 );
@@ -50,7 +53,7 @@ public class UserServiceImpl implements UserService {
         }
 
         log.info("Обновлён пользователь с id {}", userId);
-        return UserMapper.toUserDto(userRepository.update(user));
+        return UserMapper.toUserDto(user);
     }
 
     @Override
@@ -66,8 +69,11 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
+    @Transactional
     public void delete(Long userId) {
-        userRepository.deleteById(userId);
+        if (userRepository.existsById(userId)) {
+            userRepository.deleteById(userId);
+        }
         log.info("Удалён пользователь с id {}", userId);
     }
 
