@@ -2,10 +2,10 @@ package ru.practicum.shareit.item;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import ru.practicum.shareit.booking.Booking;
 import ru.practicum.shareit.booking.BookingRepository;
 import ru.practicum.shareit.booking.BookingStatus;
@@ -18,6 +18,7 @@ import ru.practicum.shareit.item.dto.ItemWithBookingsDto;
 import ru.practicum.shareit.item.dto.NewCommentRequest;
 import ru.practicum.shareit.item.dto.NewItemRequest;
 import ru.practicum.shareit.item.dto.UpdateItemRequest;
+import ru.practicum.shareit.item.model.Comment;
 import ru.practicum.shareit.item.model.Item;
 import ru.practicum.shareit.request.ItemRequestRepository;
 import ru.practicum.shareit.request.model.ItemRequest;
@@ -26,46 +27,53 @@ import ru.practicum.shareit.user.UserRepository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-@SpringBootTest
-@ActiveProfiles("test")
-@Transactional
+@ExtendWith(MockitoExtension.class)
 class ItemServiceImplTest {
 
-    @Autowired
-    private ItemService itemService;
-
-    @Autowired
+    @Mock
     private ItemRepository itemRepository;
 
-    @Autowired
+    @Mock
     private UserRepository userRepository;
 
-    @Autowired
+    @Mock
     private BookingRepository bookingRepository;
 
-    @Autowired
+    @Mock
+    private CommentRepository commentRepository;
+
+    @Mock
     private ItemRequestRepository itemRequestRepository;
+
+    @InjectMocks
+    private ItemServiceImpl itemService;
 
     private User owner;
     private User otherUser;
+    private Item item;
 
     @BeforeEach
     void setUp() {
-        owner = userRepository.save(new User(null, "Владелец", "owner@test.ru"));
-        otherUser = userRepository.save(new User(null, "Другой пользователь", "other@test.ru"));
-    }
+        owner = new User(1L, "Владелец", "owner@test.ru");
+        otherUser = new User(2L, "Другой пользователь", "other@test.ru");
 
-    private Item saveItem() {
-        Item item = new Item();
+        item = new Item();
+        item.setId(10L);
         item.setName("Дрель");
         item.setDescription("Мощная дрель");
         item.setAvailable(true);
         item.setOwner(owner);
-        return itemRepository.save(item);
     }
 
     // ---------- create ----------
@@ -74,39 +82,52 @@ class ItemServiceImplTest {
     void create_shouldCreateItemWithoutRequest() {
         NewItemRequest request = new NewItemRequest("Дрель", "Мощная дрель", true, null);
 
-        ItemDto result = itemService.create(owner.getId(), request);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRepository.save(any(Item.class))).thenAnswer(invocation -> {
+            Item saved = invocation.getArgument(0);
+            saved.setId(10L);
+            return saved;
+        });
 
-        assertThat(result.getId()).isNotNull();
+        ItemDto result = itemService.create(1L, request);
+
+        assertThat(result.getId()).isEqualTo(10L);
         assertThat(result.getName()).isEqualTo("Дрель");
         assertThat(result.getRequestId()).isNull();
+        verify(itemRequestRepository, never()).findById(anyLong());
     }
 
     @Test
     void create_shouldLinkItemToRequest_whenRequestIdProvided() {
-        ItemRequest itemRequest = new ItemRequest();
-        itemRequest.setDescription("Нужна дрель");
-        itemRequest.setRequestor(otherUser);
-        itemRequest.setCreated(LocalDateTime.now());
-        itemRequest = itemRequestRepository.save(itemRequest);
+        ItemRequest itemRequest = new ItemRequest(5L, "Нужна дрель", otherUser, LocalDateTime.now());
+        NewItemRequest request = new NewItemRequest("Дрель", "Мощная дрель", true, 5L);
 
-        NewItemRequest request = new NewItemRequest("Дрель", "Мощная дрель", true, itemRequest.getId());
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRequestRepository.findById(5L)).thenReturn(Optional.of(itemRequest));
+        when(itemRepository.save(any(Item.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        ItemDto result = itemService.create(owner.getId(), request);
+        ItemDto result = itemService.create(1L, request);
 
-        assertThat(result.getRequestId()).isEqualTo(itemRequest.getId());
+        assertThat(result.getRequestId()).isEqualTo(5L);
     }
 
     @Test
     void create_shouldThrowNotFound_whenRequestDoesNotExist() {
         NewItemRequest request = new NewItemRequest("Дрель", "Мощная дрель", true, 999L);
 
-        assertThatThrownBy(() -> itemService.create(owner.getId(), request))
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRequestRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> itemService.create(1L, request))
                 .isInstanceOf(NotFoundException.class);
+        verify(itemRepository, never()).save(any());
     }
 
     @Test
     void create_shouldThrowNotFound_whenUserDoesNotExist() {
         NewItemRequest request = new NewItemRequest("Дрель", "Мощная дрель", true, null);
+
+        when(userRepository.findById(999L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> itemService.create(999L, request))
                 .isInstanceOf(NotFoundException.class);
@@ -116,10 +137,12 @@ class ItemServiceImplTest {
 
     @Test
     void update_shouldUpdateAllFields() {
-        Item item = saveItem();
         UpdateItemRequest request = new UpdateItemRequest("Новое имя", "Новое описание", false);
 
-        ItemDto result = itemService.update(owner.getId(), item.getId(), request);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+
+        ItemDto result = itemService.update(1L, 10L, request);
 
         assertThat(result.getName()).isEqualTo("Новое имя");
         assertThat(result.getDescription()).isEqualTo("Новое описание");
@@ -128,20 +151,24 @@ class ItemServiceImplTest {
 
     @Test
     void update_shouldIgnoreBlankFields() {
-        Item item = saveItem();
         UpdateItemRequest request = new UpdateItemRequest("", null, null);
 
-        ItemDto result = itemService.update(owner.getId(), item.getId(), request);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+
+        ItemDto result = itemService.update(1L, 10L, request);
 
         assertThat(result.getName()).isEqualTo("Дрель");
     }
 
     @Test
     void update_shouldThrowForbidden_whenNotOwner() {
-        Item item = saveItem();
         UpdateItemRequest request = new UpdateItemRequest("Новое имя", null, null);
 
-        assertThatThrownBy(() -> itemService.update(otherUser.getId(), item.getId(), request))
+        when(userRepository.findById(2L)).thenReturn(Optional.of(otherUser));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+
+        assertThatThrownBy(() -> itemService.update(2L, 10L, request))
                 .isInstanceOf(ForbiddenException.class);
     }
 
@@ -149,7 +176,10 @@ class ItemServiceImplTest {
     void update_shouldThrowNotFound_whenItemDoesNotExist() {
         UpdateItemRequest request = new UpdateItemRequest("Новое имя", null, null);
 
-        assertThatThrownBy(() -> itemService.update(owner.getId(), 999L, request))
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> itemService.update(1L, 999L, request))
                 .isInstanceOf(NotFoundException.class);
     }
 
@@ -157,33 +187,35 @@ class ItemServiceImplTest {
 
     @Test
     void getById_shouldIncludeBookings_whenOwner() {
-        Item item = saveItem();
-        Booking past = new Booking(null,
-                LocalDateTime.now().minusDays(2), LocalDateTime.now().minusDays(1),
+        Booking booking = new Booking(1L, LocalDateTime.now().minusDays(1), LocalDateTime.now().minusHours(1),
                 item, otherUser, BookingStatus.APPROVED);
-        bookingRepository.save(past);
 
-        ItemWithBookingsDto result = itemService.getById(owner.getId(), item.getId());
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(bookingRepository.findAllByItemIdAndStatusOrderByStartAsc(10L, BookingStatus.APPROVED))
+                .thenReturn(List.of(booking));
+        when(commentRepository.findAllByItemId(10L)).thenReturn(List.of());
+
+        ItemWithBookingsDto result = itemService.getById(1L, 10L);
 
         assertThat(result.getLastBooking()).isNotNull();
     }
 
     @Test
     void getById_shouldNotIncludeBookings_whenNotOwner() {
-        Item item = saveItem();
-        Booking past = new Booking(null,
-                LocalDateTime.now().minusDays(2), LocalDateTime.now().minusDays(1),
-                item, otherUser, BookingStatus.APPROVED);
-        bookingRepository.save(past);
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(commentRepository.findAllByItemId(10L)).thenReturn(List.of());
 
-        ItemWithBookingsDto result = itemService.getById(otherUser.getId(), item.getId());
+        ItemWithBookingsDto result = itemService.getById(2L, 10L);
 
         assertThat(result.getLastBooking()).isNull();
+        verify(bookingRepository, never()).findAllByItemIdAndStatusOrderByStartAsc(anyLong(), any());
     }
 
     @Test
     void getById_shouldThrowNotFound_whenItemDoesNotExist() {
-        assertThatThrownBy(() -> itemService.getById(owner.getId(), 999L))
+        when(itemRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> itemService.getById(1L, 999L))
                 .isInstanceOf(NotFoundException.class);
     }
 
@@ -191,13 +223,16 @@ class ItemServiceImplTest {
 
     @Test
     void getAllByOwner_shouldReturnItemsWithBookingsAndComments() {
-        Item item = saveItem();
-        Booking future = new Booking(null,
-                LocalDateTime.now().plusDays(1), LocalDateTime.now().plusDays(2),
+        Booking booking = new Booking(1L, LocalDateTime.now().plusDays(1), LocalDateTime.now().plusDays(2),
                 item, otherUser, BookingStatus.APPROVED);
-        bookingRepository.save(future);
 
-        List<ItemWithBookingsDto> result = itemService.getAllByOwner(owner.getId());
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRepository.findAllByOwnerId(1L)).thenReturn(List.of(item));
+        when(bookingRepository.findAllByItemIdInAndStatusOrderByStartAsc(eq(List.of(10L)), eq(BookingStatus.APPROVED)))
+                .thenReturn(List.of(booking));
+        when(commentRepository.findAllByItemIdIn(List.of(10L))).thenReturn(List.of());
+
+        List<ItemWithBookingsDto> result = itemService.getAllByOwner(1L);
 
         assertThat(result).hasSize(1);
         assertThat(result.getFirst().getNextBooking()).isNotNull();
@@ -205,42 +240,54 @@ class ItemServiceImplTest {
 
     @Test
     void getAllByOwner_shouldReturnEmptyList_whenNoItems() {
-        List<ItemWithBookingsDto> result = itemService.getAllByOwner(owner.getId());
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRepository.findAllByOwnerId(1L)).thenReturn(List.of());
+
+        List<ItemWithBookingsDto> result = itemService.getAllByOwner(1L);
 
         assertThat(result).isEmpty();
+        verify(bookingRepository, never()).findAllByItemIdInAndStatusOrderByStartAsc(any(), any());
     }
 
     // ---------- addComment ----------
 
     @Test
     void addComment_shouldAddComment_whenBookingCompleted() {
-        Item item = saveItem();
-        Booking past = new Booking(null,
-                LocalDateTime.now().minusDays(2), LocalDateTime.now().minusDays(1),
-                item, otherUser, BookingStatus.APPROVED);
-        bookingRepository.save(past);
-
         NewCommentRequest request = new NewCommentRequest("Отличная вещь!");
-        CommentDto result = itemService.addComment(otherUser.getId(), item.getId(), request);
 
-        assertThat(result.getId()).isNotNull();
+        when(userRepository.findById(2L)).thenReturn(Optional.of(otherUser));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(bookingRepository.existsCompletedBooking(eq(10L), eq(2L), any())).thenReturn(true);
+        when(commentRepository.save(any(Comment.class))).thenAnswer(invocation -> {
+            Comment saved = invocation.getArgument(0);
+            saved.setId(50L);
+            return saved;
+        });
+
+        CommentDto result = itemService.addComment(2L, 10L, request);
+
+        assertThat(result.getId()).isEqualTo(50L);
         assertThat(result.getText()).isEqualTo("Отличная вещь!");
     }
 
     @Test
     void addComment_shouldThrowValidation_whenNoCompletedBooking() {
-        Item item = saveItem();
         NewCommentRequest request = new NewCommentRequest("Отличная вещь!");
 
-        assertThatThrownBy(() -> itemService.addComment(otherUser.getId(), item.getId(), request))
+        when(userRepository.findById(2L)).thenReturn(Optional.of(otherUser));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(bookingRepository.existsCompletedBooking(eq(10L), eq(2L), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> itemService.addComment(2L, 10L, request))
                 .isInstanceOf(ValidationException.class);
+        verify(commentRepository, never()).save(any());
     }
 
     // ---------- search ----------
 
     @Test
     void search_shouldReturnMatchingItems() {
-        saveItem();
+        when(itemRepository.search("дрель")).thenReturn(List.of(item));
 
         List<ItemDto> result = itemService.search("дрель");
 
@@ -249,7 +296,7 @@ class ItemServiceImplTest {
 
     @Test
     void search_shouldReturnEmptyList_whenNoMatches() {
-        saveItem();
+        when(itemRepository.search("шуруповёрт")).thenReturn(List.of());
 
         List<ItemDto> result = itemService.search("шуруповёрт");
 

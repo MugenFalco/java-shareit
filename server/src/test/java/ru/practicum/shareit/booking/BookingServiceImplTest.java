@@ -2,10 +2,10 @@ package ru.practicum.shareit.booking;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import ru.practicum.shareit.booking.dto.BookingDto;
 import ru.practicum.shareit.booking.dto.NewBookingRequest;
 import ru.practicum.shareit.exception.ForbiddenException;
@@ -18,26 +18,31 @@ import ru.practicum.shareit.user.UserRepository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-@SpringBootTest
-@ActiveProfiles("test")
-@Transactional
+@ExtendWith(MockitoExtension.class)
 class BookingServiceImplTest {
 
-    @Autowired
-    private BookingService bookingService;
-
-    @Autowired
+    @Mock
     private BookingRepository bookingRepository;
 
-    @Autowired
+    @Mock
+    private ItemRepository itemRepository;
+
+    @Mock
     private UserRepository userRepository;
 
-    @Autowired
-    private ItemRepository itemRepository;
+    @InjectMocks
+    private BookingServiceImpl bookingService;
 
     private User owner;
     private User booker;
@@ -45,80 +50,104 @@ class BookingServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        owner = userRepository.save(new User(null, "Владелец", "owner@test.ru"));
-        booker = userRepository.save(new User(null, "Арендатор", "booker@test.ru"));
+        owner = new User(1L, "Владелец", "owner@test.ru");
+        booker = new User(2L, "Арендатор", "booker@test.ru");
 
         item = new Item();
+        item.setId(10L);
         item.setName("Дрель");
-        item.setDescription("Мощная дрель");
         item.setAvailable(true);
         item.setOwner(owner);
-        item = itemRepository.save(item);
     }
 
     private NewBookingRequest futureRequest() {
         return new NewBookingRequest(item.getId(),
-                LocalDateTime.now().plusDays(1),
-                LocalDateTime.now().plusDays(2));
+                LocalDateTime.now().plusDays(1), LocalDateTime.now().plusDays(2));
+    }
+
+    private Booking savedBooking(Long id, BookingStatus status) {
+        NewBookingRequest req = futureRequest();
+        return new Booking(id, req.getStart(), req.getEnd(), item, booker, status);
     }
 
     // ---------- create ----------
 
     @Test
     void create_shouldCreateBookingInWaitingStatus() {
-        BookingDto result = bookingService.create(booker.getId(), futureRequest());
+        NewBookingRequest request = futureRequest();
 
-        assertThat(result.getId()).isNotNull();
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(bookingRepository.existsApprovedOverlap(eq(10L), any(), any())).thenReturn(false);
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(invocation -> {
+            Booking booking = invocation.getArgument(0);
+            booking.setId(100L);
+            return booking;
+        });
+
+        BookingDto result = bookingService.create(2L, request);
+
+        assertThat(result.getId()).isEqualTo(100L);
         assertThat(result.getStatus()).isEqualTo(BookingStatus.WAITING);
-        assertThat(result.getItem().getId()).isEqualTo(item.getId());
-        assertThat(result.getBooker().getId()).isEqualTo(booker.getId());
     }
 
     @Test
     void create_shouldThrowNotFound_whenItemDoesNotExist() {
-        NewBookingRequest request = new NewBookingRequest(999L,
-                LocalDateTime.now().plusDays(1), LocalDateTime.now().plusDays(2));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(itemRepository.findById(10L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> bookingService.create(booker.getId(), request))
+        assertThatThrownBy(() -> bookingService.create(2L, futureRequest()))
                 .isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void create_shouldThrowNotFound_whenUserDoesNotExist() {
+        when(userRepository.findById(999L)).thenReturn(Optional.empty());
+
         assertThatThrownBy(() -> bookingService.create(999L, futureRequest()))
                 .isInstanceOf(NotFoundException.class);
+        verify(itemRepository, never()).findById(anyLong());
     }
 
     @Test
     void create_shouldThrowValidation_whenItemNotAvailable() {
         item.setAvailable(false);
-        itemRepository.save(item);
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
 
-        assertThatThrownBy(() -> bookingService.create(booker.getId(), futureRequest()))
+        assertThatThrownBy(() -> bookingService.create(2L, futureRequest()))
                 .isInstanceOf(ValidationException.class);
     }
 
     @Test
     void create_shouldThrowNotFound_whenOwnerBooksOwnItem() {
-        assertThatThrownBy(() -> bookingService.create(owner.getId(), futureRequest()))
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+
+        assertThatThrownBy(() -> bookingService.create(1L, futureRequest()))
                 .isInstanceOf(NotFoundException.class);
     }
 
     @Test
-    void create_shouldThrowValidation_whenEndNotAfterStart() {
-        NewBookingRequest request = new NewBookingRequest(item.getId(),
-                LocalDateTime.now().plusDays(2), LocalDateTime.now().plusDays(1));
+    void create_shouldThrowValidation_whenOverlapsWithApprovedBooking() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(bookingRepository.existsApprovedOverlap(eq(10L), any(), any())).thenReturn(true);
 
-        assertThatThrownBy(() -> bookingService.create(booker.getId(), request))
+        assertThatThrownBy(() -> bookingService.create(2L, futureRequest()))
                 .isInstanceOf(ValidationException.class);
     }
 
     @Test
-    void create_shouldThrowValidation_whenOverlapsWithApprovedBooking() {
-        BookingDto first = bookingService.create(booker.getId(), futureRequest());
-        bookingService.approve(owner.getId(), first.getId(), true);
+    void create_shouldThrowValidation_whenEndNotAfterStart() {
+        NewBookingRequest request = new NewBookingRequest(10L,
+                LocalDateTime.now().plusDays(2), LocalDateTime.now().plusDays(1));
 
-        assertThatThrownBy(() -> bookingService.create(booker.getId(), futureRequest()))
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(bookingRepository.existsApprovedOverlap(eq(10L), any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> bookingService.create(2L, request))
                 .isInstanceOf(ValidationException.class);
     }
 
@@ -126,42 +155,47 @@ class BookingServiceImplTest {
 
     @Test
     void approve_shouldSetApproved_whenApprovedTrue() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
+        Booking booking = savedBooking(100L, BookingStatus.WAITING);
+        when(bookingRepository.findById(100L)).thenReturn(Optional.of(booking));
 
-        BookingDto result = bookingService.approve(owner.getId(), created.getId(), true);
+        BookingDto result = bookingService.approve(1L, 100L, true);
 
         assertThat(result.getStatus()).isEqualTo(BookingStatus.APPROVED);
     }
 
     @Test
     void approve_shouldSetRejected_whenApprovedFalse() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
+        Booking booking = savedBooking(100L, BookingStatus.WAITING);
+        when(bookingRepository.findById(100L)).thenReturn(Optional.of(booking));
 
-        BookingDto result = bookingService.approve(owner.getId(), created.getId(), false);
+        BookingDto result = bookingService.approve(1L, 100L, false);
 
         assertThat(result.getStatus()).isEqualTo(BookingStatus.REJECTED);
     }
 
     @Test
     void approve_shouldThrowForbidden_whenNotOwner() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
+        Booking booking = savedBooking(100L, BookingStatus.WAITING);
+        when(bookingRepository.findById(100L)).thenReturn(Optional.of(booking));
 
-        assertThatThrownBy(() -> bookingService.approve(booker.getId(), created.getId(), true))
+        assertThatThrownBy(() -> bookingService.approve(2L, 100L, true))
                 .isInstanceOf(ForbiddenException.class);
     }
 
     @Test
     void approve_shouldThrowValidation_whenAlreadyProcessed() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
-        bookingService.approve(owner.getId(), created.getId(), true);
+        Booking booking = savedBooking(100L, BookingStatus.APPROVED);
+        when(bookingRepository.findById(100L)).thenReturn(Optional.of(booking));
 
-        assertThatThrownBy(() -> bookingService.approve(owner.getId(), created.getId(), false))
+        assertThatThrownBy(() -> bookingService.approve(1L, 100L, false))
                 .isInstanceOf(ValidationException.class);
     }
 
     @Test
     void approve_shouldThrowNotFound_whenBookingDoesNotExist() {
-        assertThatThrownBy(() -> bookingService.approve(owner.getId(), 999L, true))
+        when(bookingRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> bookingService.approve(1L, 999L, true))
                 .isInstanceOf(NotFoundException.class);
     }
 
@@ -169,34 +203,38 @@ class BookingServiceImplTest {
 
     @Test
     void getById_shouldReturnBooking_whenBooker() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
+        Booking booking = savedBooking(100L, BookingStatus.WAITING);
+        when(bookingRepository.findById(100L)).thenReturn(Optional.of(booking));
 
-        BookingDto result = bookingService.getById(booker.getId(), created.getId());
+        BookingDto result = bookingService.getById(2L, 100L);
 
-        assertThat(result.getId()).isEqualTo(created.getId());
+        assertThat(result.getId()).isEqualTo(100L);
     }
 
     @Test
     void getById_shouldReturnBooking_whenOwner() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
+        Booking booking = savedBooking(100L, BookingStatus.WAITING);
+        when(bookingRepository.findById(100L)).thenReturn(Optional.of(booking));
 
-        BookingDto result = bookingService.getById(owner.getId(), created.getId());
+        BookingDto result = bookingService.getById(1L, 100L);
 
-        assertThat(result.getId()).isEqualTo(created.getId());
+        assertThat(result.getId()).isEqualTo(100L);
     }
 
     @Test
     void getById_shouldThrowNotFound_whenNeitherBookerNorOwner() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
-        User stranger = userRepository.save(new User(null, "Посторонний", "stranger@test.ru"));
+        Booking booking = savedBooking(100L, BookingStatus.WAITING);
+        when(bookingRepository.findById(100L)).thenReturn(Optional.of(booking));
 
-        assertThatThrownBy(() -> bookingService.getById(stranger.getId(), created.getId()))
+        assertThatThrownBy(() -> bookingService.getById(999L, 100L))
                 .isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void getById_shouldThrowNotFound_whenBookingDoesNotExist() {
-        assertThatThrownBy(() -> bookingService.getById(booker.getId(), 999L))
+        when(bookingRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> bookingService.getById(2L, 999L))
                 .isInstanceOf(NotFoundException.class);
     }
 
@@ -204,73 +242,82 @@ class BookingServiceImplTest {
 
     @Test
     void getAllByBooker_shouldReturnAll() {
-        bookingService.create(booker.getId(), futureRequest());
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(bookingRepository.findAllByBookerIdOrderByStartDesc(2L))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.WAITING)));
 
-        List<BookingDto> result = bookingService.getAllByBooker(booker.getId(), "ALL");
+        List<BookingDto> result = bookingService.getAllByBooker(2L, "ALL");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByBooker_shouldReturnCurrent() {
-        Booking current = new Booking(null,
-                LocalDateTime.now().minusHours(1), LocalDateTime.now().plusHours(1),
-                item, booker, BookingStatus.APPROVED);
-        bookingRepository.save(current);
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(bookingRepository.findAllByBookerIdAndStartBeforeAndEndAfterOrderByStartDesc(eq(2L), any(), any()))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.APPROVED)));
 
-        List<BookingDto> result = bookingService.getAllByBooker(booker.getId(), "CURRENT");
+        List<BookingDto> result = bookingService.getAllByBooker(2L, "CURRENT");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByBooker_shouldReturnPast() {
-        Booking past = new Booking(null,
-                LocalDateTime.now().minusDays(2), LocalDateTime.now().minusDays(1),
-                item, booker, BookingStatus.APPROVED);
-        bookingRepository.save(past);
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(bookingRepository.findAllByBookerIdAndEndBeforeOrderByStartDesc(eq(2L), any()))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.APPROVED)));
 
-        List<BookingDto> result = bookingService.getAllByBooker(booker.getId(), "PAST");
+        List<BookingDto> result = bookingService.getAllByBooker(2L, "PAST");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByBooker_shouldReturnFuture() {
-        bookingService.create(booker.getId(), futureRequest());
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(bookingRepository.findAllByBookerIdAndStartAfterOrderByStartDesc(eq(2L), any()))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.WAITING)));
 
-        List<BookingDto> result = bookingService.getAllByBooker(booker.getId(), "FUTURE");
+        List<BookingDto> result = bookingService.getAllByBooker(2L, "FUTURE");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByBooker_shouldReturnWaiting() {
-        bookingService.create(booker.getId(), futureRequest());
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(bookingRepository.findAllByBookerIdAndStatusOrderByStartDesc(2L, BookingStatus.WAITING))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.WAITING)));
 
-        List<BookingDto> result = bookingService.getAllByBooker(booker.getId(), "WAITING");
+        List<BookingDto> result = bookingService.getAllByBooker(2L, "WAITING");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByBooker_shouldReturnRejected() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
-        bookingService.approve(owner.getId(), created.getId(), false);
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+        when(bookingRepository.findAllByBookerIdAndStatusOrderByStartDesc(2L, BookingStatus.REJECTED))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.REJECTED)));
 
-        List<BookingDto> result = bookingService.getAllByBooker(booker.getId(), "REJECTED");
+        List<BookingDto> result = bookingService.getAllByBooker(2L, "REJECTED");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByBooker_shouldThrowValidation_whenUnknownState() {
-        assertThatThrownBy(() -> bookingService.getAllByBooker(booker.getId(), "UNSUPPORTED"))
+        when(userRepository.findById(2L)).thenReturn(Optional.of(booker));
+
+        assertThatThrownBy(() -> bookingService.getAllByBooker(2L, "UNSUPPORTED"))
                 .isInstanceOf(ValidationException.class);
     }
 
     @Test
     void getAllByBooker_shouldThrowNotFound_whenUserDoesNotExist() {
+        when(userRepository.findById(999L)).thenReturn(Optional.empty());
+
         assertThatThrownBy(() -> bookingService.getAllByBooker(999L, "ALL"))
                 .isInstanceOf(NotFoundException.class);
     }
@@ -279,68 +326,75 @@ class BookingServiceImplTest {
 
     @Test
     void getAllByOwner_shouldReturnAll() {
-        bookingService.create(booker.getId(), futureRequest());
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(bookingRepository.findAllByItemOwnerIdOrderByStartDesc(1L))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.WAITING)));
 
-        List<BookingDto> result = bookingService.getAllByOwner(owner.getId(), "ALL");
+        List<BookingDto> result = bookingService.getAllByOwner(1L, "ALL");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByOwner_shouldReturnCurrent() {
-        Booking current = new Booking(null,
-                LocalDateTime.now().minusHours(1), LocalDateTime.now().plusHours(1),
-                item, booker, BookingStatus.APPROVED);
-        bookingRepository.save(current);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(bookingRepository.findAllByItemOwnerIdAndStartBeforeAndEndAfterOrderByStartDesc(eq(1L), any(), any()))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.APPROVED)));
 
-        List<BookingDto> result = bookingService.getAllByOwner(owner.getId(), "CURRENT");
+        List<BookingDto> result = bookingService.getAllByOwner(1L, "CURRENT");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByOwner_shouldReturnPast() {
-        Booking past = new Booking(null,
-                LocalDateTime.now().minusDays(2), LocalDateTime.now().minusDays(1),
-                item, booker, BookingStatus.APPROVED);
-        bookingRepository.save(past);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(bookingRepository.findAllByItemOwnerIdAndEndBeforeOrderByStartDesc(eq(1L), any()))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.APPROVED)));
 
-        List<BookingDto> result = bookingService.getAllByOwner(owner.getId(), "PAST");
+        List<BookingDto> result = bookingService.getAllByOwner(1L, "PAST");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByOwner_shouldReturnFuture() {
-        bookingService.create(booker.getId(), futureRequest());
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(bookingRepository.findAllByItemOwnerIdAndStartAfterOrderByStartDesc(eq(1L), any()))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.WAITING)));
 
-        List<BookingDto> result = bookingService.getAllByOwner(owner.getId(), "FUTURE");
+        List<BookingDto> result = bookingService.getAllByOwner(1L, "FUTURE");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByOwner_shouldReturnWaiting() {
-        bookingService.create(booker.getId(), futureRequest());
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(bookingRepository.findAllByItemOwnerIdAndStatusOrderByStartDesc(1L, BookingStatus.WAITING))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.WAITING)));
 
-        List<BookingDto> result = bookingService.getAllByOwner(owner.getId(), "WAITING");
+        List<BookingDto> result = bookingService.getAllByOwner(1L, "WAITING");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByOwner_shouldReturnRejected() {
-        BookingDto created = bookingService.create(booker.getId(), futureRequest());
-        bookingService.approve(owner.getId(), created.getId(), false);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+        when(bookingRepository.findAllByItemOwnerIdAndStatusOrderByStartDesc(1L, BookingStatus.REJECTED))
+                .thenReturn(List.of(savedBooking(1L, BookingStatus.REJECTED)));
 
-        List<BookingDto> result = bookingService.getAllByOwner(owner.getId(), "REJECTED");
+        List<BookingDto> result = bookingService.getAllByOwner(1L, "REJECTED");
 
         assertThat(result).hasSize(1);
     }
 
     @Test
     void getAllByOwner_shouldThrowValidation_whenUnknownState() {
-        assertThatThrownBy(() -> bookingService.getAllByOwner(owner.getId(), "UNSUPPORTED"))
+        when(userRepository.findById(1L)).thenReturn(Optional.of(owner));
+
+        assertThatThrownBy(() -> bookingService.getAllByOwner(1L, "UNSUPPORTED"))
                 .isInstanceOf(ValidationException.class);
     }
 }
